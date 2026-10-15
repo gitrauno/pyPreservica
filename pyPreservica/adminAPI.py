@@ -855,3 +855,36 @@ class AdminAPI(AuthenticatedAPI):
         else:
             logger.error(request.content.decode('utf-8'))
             raise RuntimeError(request.status_code, "add_xml_transform failed")
+
+    def update_permissions(self, permissions: list[tuple[str, str, str, str]]) -> None:
+        """
+        Update the security permissions for roles.
+
+        Each permission is a tuple in the form ``(role, operation, tag, access)``, for example
+        ``("ROLE_SDB_ADMIN_USER", "READ_CONTENT", "open", "Allow")``.
+
+        :param permissions: A list of ``(role, operation, tag, access)`` permission tuples.
+        :type permissions: list[tuple[str, str, str, str]]
+        :returns: None
+        :rtype: None
+        :raises RuntimeError: If the update request fails.
+        """
+
+        self._check_if_user_has_manager_role()
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
+
+        permissions_element = xml.etree.ElementTree.Element('Permissions', {"xmlns": self.admin_ns})
+        for role, operation, tag, access in permissions:
+            permission_element = xml.etree.ElementTree.SubElement(
+                permissions_element, 'Permission', {"role": role, "operation": operation, "tag": tag})
+            permission_element.text = access
+
+        xml_request = xml.etree.ElementTree.tostring(permissions_element, encoding='utf-8')
+
+        request = self.session.put(f'{self.protocol}://{self.server}/api/admin/security/permissions',
+                                   data=xml_request, headers=headers)
+        if request.status_code == requests.codes.ok:
+            return None
+        else:
+            logger.error(request.content.decode('utf-8'))
+            raise RuntimeError(request.status_code, "update_permissions failed")
