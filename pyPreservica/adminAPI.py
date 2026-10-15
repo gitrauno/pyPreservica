@@ -855,3 +855,28 @@ class AdminAPI(AuthenticatedAPI):
         else:
             logger.error(request.content.decode('utf-8'))
             raise RuntimeError(request.status_code, "add_xml_transform failed")
+
+    def operations(self) -> list[str]:
+        """
+        Return a list of all available operations for permission management.
+
+        :returns: A list of operation name strings.
+        :rtype: list[str]
+        :raises RuntimeError: If the request fails.
+        """
+
+        self._check_if_user_has_manager_role()
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
+        request = self.session.get(f'{self.protocol}://{self.server}/api/admin/security/operations', headers=headers)
+
+        if request.status_code == requests.codes.ok:
+            xml_response = str(request.content.decode('utf-8'))
+            logger.debug(xml_response)
+            entity_response = xml.etree.ElementTree.fromstring(xml_response)
+
+            operations = entity_response.findall(f'.//{{{self.admin_ns}}}Operation')
+            # Permission updates use the operation name attribute value, e.g. READ_CONTENT.
+            return [operation.attrib['name'] for operation in operations if operation.attrib.get('name')]
+        else:
+            logger.error(request.content.decode('utf-8'))
+            raise RuntimeError(request.status_code, "operations failed")
