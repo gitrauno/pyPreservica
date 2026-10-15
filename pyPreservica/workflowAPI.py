@@ -261,6 +261,59 @@ class WorkflowAPI(AuthenticatedAPI):
             logger.error(request.content)
             raise RuntimeError(request.status_code, "get_workflow_contexts")
 
+    def add_workflow_context(self, workflow_definition_id: str, name: str, **kwargs) -> WorkflowContext:
+        """
+        Create a new Workflow Context for the given Workflow Definition.
+
+        Any extra keyword arguments are sent to the server as ``Key``/``Value``
+        parameter pairs in the XML request (e.g. ``container="/ingest-dir"``).
+        Arguments with a value of ``None`` are omitted, and booleans are sent as
+        ``"true"`` or ``"false"``.
+
+        :param workflow_definition_id: The Workflow Definition text ID, e.g.
+            ``"com.preservica.core.workflow.ingest"``.
+        :type workflow_definition_id: str
+        :param name: The name of the new workflow context.
+        :type name: str
+        :param kwargs: Arbitrary keyword arguments forwarded as workflow context parameters.
+        :returns: The newly created :class:`WorkflowContext` object.
+        :rtype: WorkflowContext
+        :raises RuntimeError: If the API call fails.
+        """
+
+        headers = {HEADER_TOKEN: self.token, 'Content-Type': 'application/xml;charset=UTF-8'}
+
+        request_payload = xml.etree.ElementTree.Element('WorkflowContextRequest',
+                                                        {"xmlns": "http://workflow.preservica.com"})
+        xml.etree.ElementTree.SubElement(request_payload, "Name").text = str(name)
+
+        for key, value in kwargs.items():
+            if value is None:
+                continue
+            parameter = xml.etree.ElementTree.SubElement(request_payload, "Parameter")
+            xml.etree.ElementTree.SubElement(parameter, "Key").text = str(key)
+            if isinstance(value, bool):
+                parameter_value = str(value).lower()
+            else:
+                parameter_value = str(value)
+            xml.etree.ElementTree.SubElement(parameter, "Value").text = parameter_value
+
+        xml.etree.ElementTree.SubElement(request_payload, "WorkflowDefinitionTextId").text = str(workflow_definition_id)
+
+        xml_request = xml.etree.ElementTree.tostring(request_payload, encoding='utf-8')
+        request = self.session.post(f'{self.protocol}://{self.server}/{self.base_url}/contexts', headers=headers,
+                                    data=xml_request)
+        if request.status_code == requests.codes.created:
+            xml_response = str(request.content.decode('utf-8'))
+            logger.debug(xml_response)
+            entity_response = xml.etree.ElementTree.fromstring(xml_response)
+            context_id = entity_response.find(f".//{{{NS_WORKFLOW}}}Id").text
+            context_name = entity_response.find(f".//{{{NS_WORKFLOW}}}Name").text
+            return WorkflowContext(context_id, context_name)
+        else:
+            logger.error(request.content)
+            raise RuntimeError(request.status_code, "add_workflow_context")
+
     def start_workflow_instance(self, workflow_context: WorkflowContext, **kwargs):
         """
         Start a new workflow instance from the given workflow context.
@@ -504,4 +557,3 @@ class WorkflowAPI(AuthenticatedAPI):
         else:
             logger.error(request.content)
             raise RuntimeError(request.status_code, "workflow_instances")
-
