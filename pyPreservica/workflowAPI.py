@@ -410,14 +410,12 @@ class WorkflowAPI(AuthenticatedAPI):
             started_element = entity_response.find(f".//{{{NS_WORKFLOW}}}Started")
             if started_element is not None:
                 if hasattr(started_element, "text"):
-                    workflow_instance.started = datetime.datetime.strptime(started_element.text,
-                                                                           '%Y-%m-%dT%H:%M:%S.%fZ')
+                    workflow_instance.started = datetime.fromisoformat(started_element.text)
 
             finished_element = entity_response.find(f".//{{{NS_WORKFLOW}}}Finished")
             if finished_element is not None:
                 if hasattr(finished_element, "text"):
-                    workflow_instance.finished = datetime.datetime.strptime(finished_element.text,
-                                                                            '%Y-%m-%dT%H:%M:%S.%fZ')
+                    workflow_instance.finished = datetime.fromisoformat(finished_element.text)
 
             workflow_instance.state = entity_response.find(f".//{{{NS_WORKFLOW}}}State").text
             workflow_instance.display_state = entity_response.find(f".//{{{NS_WORKFLOW}}}DisplayState").text
@@ -535,14 +533,12 @@ class WorkflowAPI(AuthenticatedAPI):
                 started_element = instance.find(f".//{{{NS_WORKFLOW}}}Started")
                 if started_element is not None:
                     if hasattr(started_element, "text"):
-                        workflow_instance.started = time.strptime(started_element.text,
-                                                                               '%Y-%m-%dT%H:%M:%S.%fZ')
+                        workflow_instance.started = datetime.fromisoformat(started_element.text)
 
                 finished_element = instance.find(f".//{{{NS_WORKFLOW}}}Finished")
                 if finished_element is not None:
                     if hasattr(finished_element, "text"):
-                        workflow_instance.finished = time.strptime(finished_element.text,
-                                                                                '%Y-%m-%dT%H:%M:%S.%fZ')
+                        workflow_instance.finished = datetime.fromisoformat(finished_element.text)
 
                 workflow_instance.state = instance.find(f".//{{{NS_WORKFLOW}}}State").text
                 workflow_instance.display_state = instance.find(f".//{{{NS_WORKFLOW}}}DisplayState").text
