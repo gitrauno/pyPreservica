@@ -382,22 +382,61 @@ class WorkflowAPI(AuthenticatedAPI):
             logger.error(request.content)
             raise RuntimeError(request.status_code, "terminate_workflow_instance")
 
-    def workflow_instance(self, instance_id: int) -> WorkflowInstance:
+    def workflow_instance(
+            self, 
+            instance_id: int|str,
+            include_steps: bool = True,
+            include_active_steps: bool = False,
+            include_step_inputs: bool = False,
+            include_errors: bool = True, # For backward compatibility, include errors by default
+            include_start_inputs: bool = False,
+            include_outputs: bool = False,
+        ) -> WorkflowInstance:
         """
-        Retrieve a single workflow instance by its numeric id.
+        Retrieve a single workflow instance by its numeric id or correlation token.
 
         The returned :class:`WorkflowInstance` is populated with state, timing, context,
         and archival process information retrieved from the server.
 
-        :param instance_id: The numeric id of the workflow instance to retrieve.
-        :type instance_id: int
+        :param instance_id: The numeric id or correlation token of the workflow instance to retrieve.
+        :type instance_id: int or str
+        # turn following camelCase to snake_case
+
+        :param include_steps: whether to also include the steps or not. default is True.
+        :type bool
+        :param include_active_steps: whether to exclusively include steps that are in the Active state; this options is overridden by include_steps=true.
+        :type bool
+        :param include_step_inputs: whether to also list the received inputs along with the steps.
+        :type bool
+        :param include_errors: whether to include step error messages in the response.
+        :type bool
+        :param include_start_inputs: whether to list the initial parameters the workflow was started with.
+        :type bool
+        :param include_outputs: whether to list the persisted output parameters.
+        :type bool
         :returns: A fully populated :class:`WorkflowInstance` object.
         :rtype: WorkflowInstance
         :raises RuntimeError: If the server returns a non-200 response.
         """
 
         headers = {HEADER_TOKEN: self.token}
-        params = {"includeErrors": "true"}
+        params = {}
+        # TODO: Figure this out!
+        if isinstance(instance_id, str):
+            params["type"] = "CORRELATION_ID"
+        if include_steps is not None:
+            params["includeSteps"] = "true" if include_steps else "false"
+        if include_active_steps is not None:
+            params["includeActiveSteps"] = "true" if include_active_steps else "false"
+        if include_step_inputs:
+            params["includeStepInputs"] = "true"
+        if include_errors:
+            params["includeErrors"] = "true"
+        if include_start_inputs:
+            params["includeStartInputs"] = "true"
+        if include_outputs:
+            params["includeOutputs"] = "true"
+
         request = self.session.get(f'{self.protocol}://{self.server}/{self.base_url}/instances/{str(instance_id)}',
                                    headers=headers, params=params)
         if request.status_code == requests.codes.ok:
@@ -405,8 +444,14 @@ class WorkflowAPI(AuthenticatedAPI):
             logger.debug(xml_response)
             entity_response = xml.etree.ElementTree.fromstring(xml_response)
             w_id = int(entity_response.find(f".//{{{NS_WORKFLOW}}}Id").text)
-            assert instance_id == w_id
-            workflow_instance = WorkflowInstance(int(instance_id))
+            corr_token = entity_response.find(f".//{{{NS_WORKFLOW}}}CorrelationToken").text
+            if isinstance(instance_id, int):
+                assert instance_id == w_id
+            elif isinstance(instance_id, str):
+                assert instance_id == corr_token
+
+            workflow_instance = WorkflowInstance(w_id)
+            workflow_instance.correlation_token = corr_token
             started_element = entity_response.find(f".//{{{NS_WORKFLOW}}}Started")
             if started_element is not None:
                 if hasattr(started_element, "text"):
@@ -426,6 +471,7 @@ class WorkflowAPI(AuthenticatedAPI):
                 f".//{{{NS_WORKFLOW}}}WorkflowContextName").text
             workflow_instance.workflow_definition_id = entity_response.find(
                 f".//{{{NS_WORKFLOW}}}WorkflowDefinitionTextId").text
+            
 
             workflow_instance.xml_response = xml_response
 
@@ -434,7 +480,7 @@ class WorkflowAPI(AuthenticatedAPI):
             logger.error(request.content)
             raise RuntimeError(request.status_code, "workflow_instance")
 
-    def workflow_instances(self, workflow_state: str, workflow_type: str, **kwargs) -> Generator[WorkflowInstance, None, None]:
+    def workflow_instances(self, workflow_state: str | list, workflow_type: str, **kwargs) -> Generator[WorkflowInstance, None, None]:
         """
         Return a generator of workflow instances filtered by state and type.
 
@@ -442,10 +488,10 @@ class WorkflowAPI(AuthenticatedAPI):
         Optional keyword arguments allow further filtering by context, creator, or date
         range.
 
-        :param workflow_state: The workflow state to filter by. Must be one of
+        :param workflow_state: The workflow state(s) to filter by. Must be one 
             ``"Aborted"``, ``"Active"``, ``"Completed"``, ``"Finished_Mixed_Outcome"``,
             ``"Pending"``, ``"Suspended"``, ``"Unknown"``, or ``"Failed"``.
-        :type workflow_state: str
+        :type workflow_state: str or list
         :param workflow_type: The workflow type to filter by. Must be one of
             ``"Ingest"``, ``"Access"``, ``"Transformation"``, or ``"DataManagement"``.
         :type workflow_type: str
@@ -457,6 +503,10 @@ class WorkflowAPI(AuthenticatedAPI):
         :type from_date: datetime.date or datetime.datetime or str
         :param to_date: Optional end date for filtering by workflow start time.
         :type to_date: datetime.date or datetime.datetime or str
+        :param latest_first: Optional boolean to sort results with the latest first.
+        :type latest_first: bool
+        :param include_start_inputs: Optional boolean to include start inputs in the results.
+        :type include_start_inputs: bool
         :returns: Generator that lazily yields :class:`WorkflowInstance` objects.
         :rtype: Generator[WorkflowInstance, None, None]
         :raises RuntimeError: If an invalid state or type is supplied, or if the API
@@ -475,12 +525,12 @@ class WorkflowAPI(AuthenticatedAPI):
             for w in workflow_instances_list:
                 yield w
 
-    def __workflow_instances__(self, workflow_state: str, workflow_type: str, maximum: int = 25, start_value: int = 0,
+    def __workflow_instances__(self, workflow_state: str|list, workflow_type: str, maximum: int = 25, start_value: int = 0,
                                **kwargs):
         """
         Return a list of Workflow instances
 
-        :param workflow_state: The Workflow state: Aborted, Active, Completed, Finished_Mixed_Outcome, Pending,
+        :param workflow_state: The Workflow state(s): Aborted, Active, Completed, Finished_Mixed_Outcome, Pending,
         Suspended, Unknown, or Failed
         :param workflow_type: The Workflow type: Ingest, Access, Transformation or DataManagement
 
@@ -488,7 +538,14 @@ class WorkflowAPI(AuthenticatedAPI):
 
         headers = {HEADER_TOKEN: self.token}
 
-        if workflow_state not in self.workflow_states:
+        if isinstance(workflow_state, str):
+            workflow_state = [workflow_state]
+        elif isinstance(workflow_state, list):
+            for state in workflow_state:
+                if state not in self.workflow_states:
+                    logger.error("Invalid Workflow State")
+                    raise RuntimeError("Invalid Workflow State")
+        else:
             logger.error("Invalid Workflow State")
             raise RuntimeError("Invalid Workflow State")
 
@@ -496,7 +553,7 @@ class WorkflowAPI(AuthenticatedAPI):
             logger.error("Invalid Workflow Type")
             raise RuntimeError("Invalid Workflow Type")
 
-        params = {"type": workflow_type, "state": workflow_state}
+        params = {"type": workflow_type, "state": ','.join(workflow_state)}
 
         if "contextId" in kwargs:
             context_id = kwargs.get("contextId")
@@ -514,6 +571,17 @@ class WorkflowAPI(AuthenticatedAPI):
             to_date = kwargs.get("to_date")
             params["to"] = parse_date_to_iso(to_date)
 
+        if "latest_first" in kwargs:
+            latest_first = kwargs.get("latest_first")
+            params["latestFirst"] = latest_first
+
+        include_start_inputs = kwargs.get("include_start_inputs")
+        if include_start_inputs is not None:
+            if not isinstance(include_start_inputs, bool):
+                logger.error("Invalid value for include_start_inputs")
+                raise RuntimeError("Invalid value for include_start_inputs")
+            params["includeStartInputs"] = include_start_inputs
+
         params["start"] = int(start_value)
         params["max"] = int(maximum)
 
@@ -529,6 +597,7 @@ class WorkflowAPI(AuthenticatedAPI):
             for instance in workflow_instance:
                 instance_id = instance.find(f".//{{{NS_WORKFLOW}}}Id").text
                 workflow_instance = WorkflowInstance(int(instance_id))
+                workflow_instance.correlation_token = instance.find(f".//{{{NS_WORKFLOW}}}CorrelationToken").text
 
                 started_element = instance.find(f".//{{{NS_WORKFLOW}}}Started")
                 if started_element is not None:
@@ -547,7 +616,19 @@ class WorkflowAPI(AuthenticatedAPI):
                 workflow_instance.workflow_context_id = instance.find(f".//{{{NS_WORKFLOW}}}WorkflowContextId").text
                 workflow_instance.workflow_context_name = instance.find(f".//{{{NS_WORKFLOW}}}WorkflowContextName").text
                 workflow_instance.workflow_definition_id = instance.find(
-                    f".//{{{NS_WORKFLOW}}}WorkflowDefinitionTextId").text
+                    f".//{{{NS_WORKFLOW}}}WorkflowDefinitionTextId").text                
+
+                if include_start_inputs:
+                    start_inputs_element = instance.find(f".//{{{NS_WORKFLOW}}}StartInputs")
+                    if start_inputs_element is not None:
+                        start_inputs = {}
+                        for ip in start_inputs_element.findall(f".//{{{NS_WORKFLOW}}}InputParameter"):
+                            key = ip.find(f".//{{{NS_WORKFLOW}}}Key").text
+                            value = ip.find(f".//{{{NS_WORKFLOW}}}Value").text
+                            if key is not None:
+                                start_inputs[key] = value
+                    workflow_instance.start_inputs = start_inputs
+
                 workflow_instances.append(workflow_instance)
             return tuple((total_count, count, workflow_instances))
         else:
